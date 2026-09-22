@@ -1,0 +1,48 @@
+name: Restock Check
+
+on:
+  schedule:
+    # Runs every 15 minutes. GitHub may delay this slightly under load,
+    # but it's not billed for idle time either way - only for the seconds
+    # each run actually takes.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {} # lets you trigger a manual run from the Actions tab, for testing
+
+permissions:
+  contents: write # needed so the workflow can commit the updated state.json back
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Check stock
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BOOKS_JSON: ${{ secrets.BOOKS_JSON }}
+        run: python restock_watcher.py --once
+
+      - name: Save updated stock state
+        run: |
+          git config user.name "restock-watcher-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "Update stock state [skip ci]"
+          git push
+        continue-on-error: true
