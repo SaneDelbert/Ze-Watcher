@@ -34,6 +34,7 @@ STATE_PATH = BASE_DIR / "state.json"
 # If you find the bot getting it wrong for a specific book, run with --debug,
 # look at the printed page text, and add/adjust phrases here.
 OUT_OF_STOCK_PHRASES = [
+    "stok barang habis",  # confirmed exact wording Gramedia shows as a badge
     "stok habis",
     "produk habis",
     "sedang habis",
@@ -45,7 +46,10 @@ OUT_OF_STOCK_PHRASES = [
 ]
 
 # Phrases on an enabled "buy" button that indicate the item CAN be purchased.
+# "keranjang" alone (Gramedia's actual button just says "Keranjang" with a
+# "+" icon, not the fuller "Tambah ke Keranjang" phrasing) is the main signal.
 IN_STOCK_BUTTON_PHRASES = [
+    "keranjang",
     "tambah ke keranjang",
     "tambah keranjang",
     "beli sekarang",
@@ -114,11 +118,16 @@ def save_state(state):
 
 def check_book_stock(page, url, debug=False):
     """
-    Loads a Gramedia product page and returns (in_stock: bool, page_title: str).
+    Loads a Gramedia product page and returns (in_stock: bool | None, page_title: str).
+
+    in_stock is None when the page couldn't be confidently read either way -
+    callers should treat None as "unknown" and NOT act on it, rather than
+    guessing.
     """
     page.goto(url, wait_until="networkidle", timeout=45000)
-    # Give any client-side rendering a moment to settle.
-    page.wait_for_timeout(1500)
+    # Give any client-side rendering a moment to settle. Next.js apps often
+    # fetch stock data *after* the initial page load, so this is generous.
+    page.wait_for_timeout(3000)
 
     body_text = page.inner_text("body").lower()
 
@@ -132,6 +141,7 @@ def check_book_stock(page, url, debug=False):
 
     # Look for an enabled buy button as a positive signal.
     buy_button_enabled = False
+    matched_button_phrase = None
     for phrase in IN_STOCK_BUTTON_PHRASES:
         try:
             btn = page.get_by_text(phrase, exact=False).first
@@ -141,31 +151,53 @@ def check_book_stock(page, url, debug=False):
                 )
                 if not is_disabled:
                     buy_button_enabled = True
+                    matched_button_phrase = phrase
                     break
         except Exception:
             continue
 
+    # Collect every visible button's text - hugely useful for figuring out
+    # the *actual* wording Gramedia uses when our phrase guesses don't match.
+    all_button_texts = []
     if debug:
-        snippet = body_text[:800].replace("\n", " ")
+        try:
+            buttons = page.locator("button")
+            count = min(buttons.count(), 20)
+            for i in range(count):
+                try:
+                    txt = buttons.nth(i).inner_text(timeout=500).strip()
+                    if txt:
+                        all_button_texts.append(txt)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    if debug:
+        snippet = body_text[:1200].replace("\n", " ")
         log.info(f"[DEBUG] {url}")
         log.info(f"[DEBUG] Title detected: {title!r}")
         log.info(f"[DEBUG] Out-of-stock phrases found: {found_out_of_stock}")
-        log.info(f"[DEBUG] Enabled buy button found: {buy_button_enabled}")
+        log.info(f"[DEBUG] Enabled buy button found: {buy_button_enabled} (matched: {matched_button_phrase!r})")
+        log.info(f"[DEBUG] All visible button texts on page: {all_button_texts}")
         log.info(f"[DEBUG] Page text snippet: {snippet}")
 
     if found_out_of_stock:
         in_stock = False
-    else:
-        # No out-of-stock phrase found. Trust an enabled buy button if we saw one;
-        # otherwise assume in stock (Gramedia usually shows an explicit "habis" message).
+    elif buy_button_enabled:
         in_stock = True
+    else:
+        # Neither a known out-of-stock phrase nor a recognized enabled buy
+        # button was found. Rather than guessing, report "unknown" so the
+        # caller doesn't wrongly fire (or clear) a notification on a bad read.
+        in_stock = None
 
     return in_stock, title or url
 
 
 def send_discord_notification(webhook_url, book_name, url):
     payload = {
-        "content": f"📚 **Restock alert!** *{book_name}* is back in stock on Gramedia.com!\n{url}"
+        "content": f"ðŸ“š **Restock alert!** *{book_name}* is back in stock on Gramedia.com!\n{url}"
     }
     resp = requests.post(webhook_url, json=payload, timeout=15)
     if resp.status_code not in (200, 204):
@@ -195,6 +227,16 @@ def run_check(config, state, debug=False):
                 display_name = book.get("name") or detected_title
 
                 was_in_stock = state.get(url, {}).get("in_stock")
+
+                if in_stock is None:
+                    log.warning(
+                        f"{display_name}: COULD NOT DETERMINE STOCK STATUS "
+                        f"(previous: {was_in_stock}) - leaving status unchanged. "
+                        f"Re-run with --debug to see what was found on the page."
+                    )
+                    # Don't touch state or send a notification on an unclear read.
+                    continue
+
                 log.info(
                     f"{display_name}: {'IN STOCK' if in_stock else 'out of stock'} "
                     f"(previous: {was_in_stock})"
