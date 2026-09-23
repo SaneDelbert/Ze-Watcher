@@ -39,7 +39,9 @@ jobs:
 
       - name: Check stock
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           BOOKS_JSON: ${{ secrets.BOOKS_JSON }}
         run: |
           if [ "${{ inputs.debug }}" = "true" ]; then
