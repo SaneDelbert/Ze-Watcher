@@ -9,7 +9,7 @@
   },
   "https://www.gramedia.com/products/the-quintessential-quintuplets-05": {
     "name": "Quint 5",
-    "in_stock": false
+    "in_stock": true
   },
   "https://www.gramedia.com/products/the-quintessential-quintuplets-06": {
     "name": "Quint 6",
@@ -33,6 +33,6 @@
   },
   "https://www.gramedia.com/products/the-fragrant-flower-blooms-with-dignitykaoru--rin-01": {
     "name": "Kaoru",
-    "in_stock": false
+    "in_stock": true
   }
 }
