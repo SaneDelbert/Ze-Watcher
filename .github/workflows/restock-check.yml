@@ -6,7 +6,12 @@ on:
     # but it's not billed for idle time either way - only for the seconds
     # each run actually takes.
     - cron: "*/15 * * * *"
-  workflow_dispatch: {} # lets you trigger a manual run from the Actions tab, for testing
+  workflow_dispatch: # lets you trigger a manual run from the Actions tab, for testing
+    inputs:
+      debug:
+        description: "Print detailed page-detection info to the logs"
+        type: boolean
+        default: false
 
 permissions:
   contents: write # needed so the workflow can commit the updated state.json back
@@ -34,9 +39,16 @@ jobs:
 
       - name: Check stock
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           BOOKS_JSON: ${{ secrets.BOOKS_JSON }}
-        run: python restock_watcher.py --once
+        run: |
+          if [ "${{ inputs.debug }}" = "true" ]; then
+            python restock_watcher.py --once --debug
+          else
+            python restock_watcher.py --once
+          fi
 
       - name: Save updated stock state
         run: |
