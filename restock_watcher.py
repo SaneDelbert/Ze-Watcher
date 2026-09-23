@@ -67,37 +67,43 @@ log = logging.getLogger("restock_watcher")
 def load_config():
     """
     Config can come from environment variables (used when deployed to a
-    host like Railway) or from config.json (used for local runs). Env
-    vars take priority if both are present.
+    host like GitHub Actions) or from config.json (used for local runs).
+    Env vars take priority if both are present.
 
     Env vars:
-      DISCORD_WEBHOOK_URL          required
+      DISCORD_BOT_TOKEN            required - your bot's token from the
+                                    Discord Developer Portal
+      DISCORD_CHANNEL_ID           required - the channel to post alerts in
       BOOKS_JSON                   required - JSON array, e.g.
                                     [{"name":"Man Boy","url":"https://www.gramedia.com/products/man-boy"}]
       CHECK_INTERVAL_MINUTES       optional, default 15
     """
     import os
 
-    env_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+    env_token = os.environ.get("DISCORD_BOT_TOKEN")
+    env_channel = os.environ.get("DISCORD_CHANNEL_ID")
+    env_user = os.environ.get("DISCORD_USER_ID")  # optional - who to @mention
     env_books = os.environ.get("BOOKS_JSON")
 
-    if env_webhook and env_books:
+    if env_token and env_channel and env_books:
         try:
             books = json.loads(env_books)
         except json.JSONDecodeError as e:
             log.error(f"BOOKS_JSON env var is not valid JSON: {e}")
             sys.exit(1)
         return {
-            "discord_webhook_url": env_webhook,
+            "discord_bot_token": env_token,
+            "discord_channel_id": env_channel,
+            "discord_user_id": env_user,
             "books": books,
             "check_interval_minutes": int(os.environ.get("CHECK_INTERVAL_MINUTES", 15)),
         }
 
     if not CONFIG_PATH.exists():
         log.error(
-            "No config found. Either set DISCORD_WEBHOOK_URL and BOOKS_JSON "
-            "environment variables, or copy config.example.json to config.json "
-            "and fill in your webhook URL and book URLs."
+            "No config found. Either set DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID "
+            "and BOOKS_JSON environment variables, or copy config.example.json "
+            "to config.json and fill in your bot token, channel ID and book URLs."
         )
         sys.exit(1)
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -195,19 +201,32 @@ def check_book_stock(page, url, debug=False):
     return in_stock, title or url
 
 
-def send_discord_notification(webhook_url, book_name, url):
-    payload = {
-        "content": f"ðŸ“š **Restock alert!** *{book_name}* is back in stock on Gramedia.com!\n{url}"
+def send_discord_notification(bot_token, channel_id, book_name, url, user_id=None):
+    """
+    Sends the alert as a message from your actual Discord bot (not a webhook),
+    using Discord's REST API directly - no persistent connection needed for
+    a one-off message like this.
+    """
+    api_url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
     }
-    resp = requests.post(webhook_url, json=payload, timeout=15)
-    if resp.status_code not in (200, 204):
-        log.error(f"Discord webhook failed ({resp.status_code}): {resp.text}")
+    mention = f"<@{user_id}> " if user_id else ""
+    payload = {
+        "content": f"{mention}ðŸ“š **Restock alert!** *{book_name}* is back in stock on Gramedia.com!\n{url}"
+    }
+    resp = requests.post(api_url, headers=headers, json=payload, timeout=15)
+    if resp.status_code not in (200, 201):
+        log.error(f"Discord bot message failed ({resp.status_code}): {resp.text}")
     else:
-        log.info(f"Sent Discord notification for: {book_name}")
+        log.info(f"Sent Discord bot notification for: {book_name}")
 
 
 def run_check(config, state, debug=False):
-    webhook_url = config["discord_webhook_url"]
+    bot_token = config["discord_bot_token"]
+    channel_id = config["discord_channel_id"]
+    user_id = config.get("discord_user_id")
     books = config["books"]
 
     with sync_playwright() as p:
@@ -245,7 +264,7 @@ def run_check(config, state, debug=False):
                 # Notify only on a transition from out-of-stock -> in-stock,
                 # so you don't get spammed every single check.
                 if in_stock and was_in_stock is False:
-                    send_discord_notification(webhook_url, display_name, url)
+                    send_discord_notification(bot_token, channel_id, display_name, url, user_id=user_id)
 
                 state[url] = {"name": display_name, "in_stock": in_stock}
 
